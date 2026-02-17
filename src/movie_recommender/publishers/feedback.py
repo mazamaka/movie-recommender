@@ -140,9 +140,17 @@ async def poll_reactions():
             logger.warning("Telegram getUpdates failed", response=data)
             return
 
+        pending_commands: list[dict] = []
+
         async with _lock:
             for update in data.get("result", []):
                 _poll_offset = update["update_id"] + 1
+
+                # Collect bot commands for processing outside lock
+                msg = update.get("message")
+                if msg and msg.get("text", "").startswith("/"):
+                    pending_commands.append(msg)
+
                 reaction_count = update.get("message_reaction_count")
                 if reaction_count:
                     _process_reaction_count(reaction_count)
@@ -152,6 +160,15 @@ async def poll_reactions():
 
             # Save offset
             save_json("poll_offset", {"offset": _poll_offset})
+
+        # Handle bot commands outside lock to avoid blocking mutations
+        if pending_commands:
+            from movie_recommender.publishers.bot_commands import handle_command
+            for cmd_msg in pending_commands:
+                try:
+                    await handle_command(cmd_msg)
+                except Exception as e:
+                    logger.warning("Bot command error", error=str(e))
 
     except Exception as e:
         logger.warning("Reaction poll error", error=str(e))
@@ -280,6 +297,10 @@ def advance_offset(new_offset: int):
 async def reaction_poll_loop():
     """Background loop that polls for reactions every 30 seconds."""
     init_feedback()
+
+    from movie_recommender.publishers.bot_commands import register_bot_commands
+    await register_bot_commands()
+
     logger.info("Reaction poll loop started")
     while True:
         if not _poll_paused:
