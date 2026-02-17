@@ -3,14 +3,14 @@ import asyncio
 
 import structlog
 
-from movie_recommender.search.base import BaseTorrentSearcher, SearchResult
+from movie_recommender.search.base import SearchResult
 from movie_recommender.search.jackett import JackettSearcher
 
 logger = structlog.get_logger()
 
 
 class TorrentAggregator:
-    def __init__(self, searchers: list[BaseTorrentSearcher] | None = None) -> None:
+    def __init__(self, searchers: list | None = None) -> None:
         self.searchers = searchers or [JackettSearcher()]
 
     async def search_all(self, query: str, year: int | None = None) -> list[SearchResult]:
@@ -30,7 +30,7 @@ class TorrentAggregator:
         unique: list[SearchResult] = []
         for r in all_results:
             key = r.info_hash or r.magnet_link
-            if key not in seen:
+            if key and key not in seen:
                 seen.add(key)
                 unique.append(r)
 

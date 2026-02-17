@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     # Telegram
     telegram_bot_token: str = ""
     telegram_channel_id: str = ""
+    telegram_discussion_group_id: str = ""
     telegram_publish_interval: int = 14400
 
     # Torrent sources
