@@ -58,5 +58,14 @@ def run(daemon: bool = False) -> None:
     console.print("[yellow]Not implemented yet[/yellow]")
 
 
+@app.command()
+def serve(host: str = "0.0.0.0", port: int = 9000) -> None:
+    """Start the API server."""
+    import uvicorn
+
+    console.print(f"[bold]Starting server on {host}:{port}...[/bold]")
+    uvicorn.run("movie_recommender.app:app", host=host, port=port, reload=False)
+
+
 if __name__ == "__main__":
     app()
