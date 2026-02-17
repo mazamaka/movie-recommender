@@ -91,6 +91,8 @@ class JackettSearcher:
             "Jaskier", "Pazl Voice", "New-Team", "ColdFilm", "IdeaFilm",
             "Kerob", "Profix Media", "TVShows", "Hamster Studio", "AMS",
             "AlexFilm", "BaibaKo", "FOX", "SDI Media", "Невафильм",
+            "WinMedia", "ExKinoRay", "MovieDalen", "Portablius", "DoMiNo",
+            "селезень", "Red Head Sound", "GoldTeam", "Kinozal",
         ]
         for s in studios:
             if s.lower() in t.lower():
@@ -98,6 +100,8 @@ class JackettSearcher:
 
         # Dubbing types
         patterns: dict[str, str] = {
+            r'(?i)\bD[-\s]': 'Дубляж',
+            r'(?i)\bP[-\s]': 'Профессиональный',
             r'(?i)\bдублир\w*': 'Дубляж',
             r'(?i)\bдубляж\b': 'Дубляж',
             r'(?i)\bлицензи\w*': 'Лицензия',

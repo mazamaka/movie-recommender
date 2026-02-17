@@ -48,6 +48,7 @@ class Settings(BaseSettings):
     recommend_top_n: int = 10
     recommend_interval: int = 86400
     content_types: str = "movie,series,cartoon"
+    pipeline_interval_hours: int = 12
 
 
 settings = Settings()

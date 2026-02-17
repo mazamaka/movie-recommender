@@ -1,15 +1,20 @@
 """Full recommendation pipeline: sync -> enrich -> profile -> candidates -> score -> search -> filter -> publish."""
 import asyncio
 import json
+import random
+from datetime import datetime
 
 import httpx
 import structlog
 
 from movie_recommender.core.config import settings
-from movie_recommender.ingest.tmdb_client import get_movie_details, search_movie, get_trending, discover_movies
+from movie_recommender.ingest.tmdb_client import (
+    get_movie_details, search_movie, get_trending, discover_movies,
+    get_recommendations, get_similar,
+)
 from movie_recommender.recommender.content_based import score_movie
 from movie_recommender.recommender.profile_builder import build_profile
-from movie_recommender.publishers.feedback import get_genre_feedback
+from movie_recommender.publishers.feedback import get_genre_feedback, get_blocked_genres, get_published_tmdb_ids, pause_poll, resume_poll
 from movie_recommender.search.aggregator import TorrentAggregator
 from movie_recommender.filters.pipeline import FilterPipeline
 from movie_recommender.publishers.telegram import publish_recommendation
@@ -41,24 +46,42 @@ async def run_pipeline(top_n: int | None = None) -> list[dict]:
     if profile.get("genre_weights"):
         logger.info("Profile genres", top=list(profile["genre_weights"].keys())[:5])
 
-    # Step 4: Get candidates
+    # Step 4: Get candidates (expanded sources)
     logger.info("Pipeline step 4: getting candidates")
-    candidates = await _get_candidates(enriched, profile)
+    candidates = await _get_candidates(enriched, profile, signals)
     logger.info("Candidates found", count=len(candidates))
 
-    # Step 5: Score and rank (with feedback + Lampa signals)
+    # Step 5: Score, rank, deduplicate
     watched_ids = {m.get("tmdb_id") for m in enriched if m.get("tmdb_id")}
+    # Also exclude raw history IDs (including TV shows that failed to enrich)
+    for item in history:
+        tid = item.get("tmdb_id")
+        if tid:
+            watched_ids.add(tid)
     thrown_ids = signals.get("thrown", set()) if signals else set()
     liked_ids = signals.get("liked", set()) if signals else set()
+    published_ids = get_published_tmdb_ids()  # DEDUP: skip already published
     genre_feedback = get_genre_feedback()
+    blocked_genres = get_blocked_genres()
+
     scored = []
     for c in candidates:
         cid = c.get("tmdb_id")
         if cid in watched_ids:
             continue
-        # Skip thrown/dropped movies
         if cid in thrown_ids:
             continue
+        if cid in published_ids:
+            continue  # DEDUP
+        # Skip movies with blocked genres (💩 reaction)
+        movie_genres = c.get("genres", [])
+        if isinstance(movie_genres, str):
+            movie_genres = json.loads(movie_genres)
+        if blocked_genres and movie_genres:
+            blocked_overlap = len(set(movie_genres) & blocked_genres)
+            if blocked_overlap >= len(movie_genres) * 0.5:
+                continue  # Skip if 50%+ genres are blocked
+
         s = score_movie(c, profile) if profile else 0.5
         # Boost if similar genres to liked movies
         if liked_ids and enriched:
@@ -68,21 +91,28 @@ async def run_pipeline(top_n: int | None = None) -> list[dict]:
                     g = m.get("genres", [])
                     if isinstance(g, list):
                         liked_genres.update(g)
-            movie_genres = c.get("genres", [])
             if isinstance(movie_genres, list) and liked_genres:
                 overlap = len(set(movie_genres) & liked_genres) / max(len(movie_genres), 1)
                 s = min(s + overlap * 0.15, 1.0)
-        # Apply Telegram reaction feedback
+        # Apply Telegram reaction feedback (favorites=2x, blocks=-3x)
         if genre_feedback:
-            movie_genres = c.get("genres", [])
-            if isinstance(movie_genres, str):
-                import json as _json
-                movie_genres = _json.loads(movie_genres)
             feedback_bonus = sum(genre_feedback.get(g, 0.0) for g in movie_genres) * 0.1
             s = min(max(s + feedback_bonus, 0.0), 1.0)
         scored.append({**c, "score": s})
+    # Filter out unreleased movies
+    today = datetime.now().strftime("%Y-%m-%d")
+    scored = [c for c in scored if not c.get("release_date") or c["release_date"] <= today]
+
     scored.sort(key=lambda x: x["score"], reverse=True)
-    logger.info("Pipeline step 5: scored candidates", count=len(scored), thrown=len(thrown_ids), feedback_genres=len(genre_feedback))
+    logger.info(
+        "Pipeline step 5: scored candidates",
+        count=len(scored), thrown=len(thrown_ids),
+        deduped=len(published_ids), feedback_genres=len(genre_feedback),
+    )
+
+    if not scored:
+        logger.warning("No new candidates after dedup, nothing to publish")
+        return []
 
     # Step 6-7: Search torrents + filter
     logger.info("Pipeline step 6-7: searching torrents")
@@ -90,16 +120,18 @@ async def run_pipeline(top_n: int | None = None) -> list[dict]:
     agg = TorrentAggregator()
     pipe = FilterPipeline()
 
-    for movie in scored[:top_n * 3]:
-        title = movie.get("title_ru") or movie.get("title_en", "")
-        if not title:
+    for movie in scored[:top_n * 10]:
+        title_ru = movie.get("title_ru", "")
+        title_en = movie.get("title_en", "")
+        year = movie.get("year")
+        if not title_ru and not title_en:
             continue
         try:
-            results = await agg.search_all(title, movie.get("year"))
+            results = await _search_torrent(agg, title_ru, title_en, year)
+            logger.debug("Torrent search", title=title_ru or title_en, year=year, results=len(results))
             filtered = pipe.execute(results)
             if not filtered:
-                # Try relaxed: just seeders filter
-                filtered = [r for r in results if r.seeders >= settings.min_seeders]
+                filtered = [r for r in results if r.seeders >= settings.min_seeders and r.quality in ("2160p", "1080p")]
             if filtered:
                 best = filtered[0]
                 recommendations.append({
@@ -116,50 +148,59 @@ async def run_pipeline(top_n: int | None = None) -> list[dict]:
                     "score": movie["score"],
                 })
         except Exception as e:
-            logger.warning("Search failed for movie", title=title, error=str(e))
+            logger.warning("Search failed for movie", title=title_ru or title_en, error=str(e))
 
         if len(recommendations) >= top_n:
             break
 
-    # Step 8: Publish
+    # Step 8: Publish (pause poll loop to avoid getUpdates conflict)
     logger.info("Pipeline step 8: publishing", count=len(recommendations))
+    pause_poll()
     published = 0
-    for rec in recommendations:
-        trailer_url = rec["movie"].get("trailer_url")
-        if not trailer_url:
-            trailer_url = await find_trailer(
-                rec["movie"].get("title_ru", ""), rec["movie"].get("year")
-            )
-        msg_id = await publish_recommendation(rec["movie"], rec["torrent"], trailer_url)
-        if msg_id:
-            published += 1
-            # Post Rezka reviews as comments
-            try:
-                reviews = await fetch_rezka_reviews(
+    try:
+        for rec in recommendations:
+            trailer_url = rec["movie"].get("trailer_url")
+            if not trailer_url:
+                trailer_url = await find_trailer(
                     rec["movie"].get("title_ru", ""), rec["movie"].get("year")
                 )
-                if reviews:
-                    await post_reviews_as_comments(msg_id, reviews[:3], rec["movie"].get("title_ru", ""))
+
+            # Fetch Rezka reviews + get Rezka URL for the post
+            rezka_url = None
+            reviews = []
+            try:
+                reviews, rezka_url = await fetch_rezka_reviews(
+                    rec["movie"].get("title_ru", ""), rec["movie"].get("year")
+                )
             except Exception as e:
                 logger.warning("Rezka reviews failed", error=str(e))
-        await asyncio.sleep(3)
+
+            msg_id = await publish_recommendation(
+                rec["movie"], rec["torrent"], trailer_url, rezka_url,
+            )
+            if msg_id:
+                published += 1
+                if reviews:
+                    try:
+                        await post_reviews_as_comments(msg_id, reviews[:5], rec["movie"].get("title_ru", ""))
+                    except Exception as e:
+                        logger.warning("Rezka comments failed", error=str(e))
+            await asyncio.sleep(3)
+    finally:
+        resume_poll()
 
     logger.info("Pipeline complete", total_scored=len(scored), published=published)
     return recommendations
 
 
 async def _get_sync_history() -> tuple[list[dict], dict]:
-    """Get watch history and signals from local sync API.
-
-    Returns: (items_to_enrich, signals) where signals contain liked/thrown/etc IDs.
-    """
+    """Get watch history and signals from local sync API."""
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.get("http://localhost:9000/api/v1/sync/history")
             data = resp.json()
             items = data.get("items", [])
 
-            # Add bookmarks, liked, booked, wath as items to enrich
             seen = {i.get("tmdb_id") for i in items if i.get("tmdb_id")}
             for tmdb_id in data.get("bookmarks", []):
                 if isinstance(tmdb_id, int) and tmdb_id not in seen:
@@ -212,7 +253,7 @@ async def _enrich_movies(items: list[dict]) -> list[dict]:
             else:
                 continue
             enriched.append(tmdb_to_movie(details))
-            await asyncio.sleep(0.3)  # TMDB rate limit
+            await asyncio.sleep(0.3)
         except Exception as e:
             logger.warning("Enrich failed", title=item.get("title"), error=str(e))
 
@@ -226,7 +267,6 @@ def tmdb_to_movie(d: dict) -> dict:
     directors = [c["name"] for c in credits.get("crew", []) if c.get("job") == "Director"]
     actors = [c["name"] for c in credits.get("cast", [])[:10]]
 
-    # Find trailer
     trailer_url = None
     for v in d.get("videos", {}).get("results", []):
         if v.get("type") == "Trailer" and v.get("site") == "YouTube":
@@ -240,8 +280,11 @@ def tmdb_to_movie(d: dict) -> dict:
         "tmdb_id": d.get("id"),
         "title_ru": d.get("title", ""),
         "title_en": d.get("original_title", ""),
+        "release_date": release_date,
         "year": year,
         "rating_imdb": d.get("vote_average"),
+        "vote_count": d.get("vote_count", 0),
+        "popularity": d.get("popularity", 0),
         "rating_kp": None,
         "genres": genres,
         "directors": directors,
@@ -254,43 +297,113 @@ def tmdb_to_movie(d: dict) -> dict:
     }
 
 
-async def _get_candidates(watched: list[dict], profile: dict) -> list[dict]:
-    """Get candidate movies from TMDB trending + discover."""
+async def _get_candidates(watched: list[dict], profile: dict, signals: dict | None = None) -> list[dict]:
+    """Get candidate movies from multiple TMDB sources."""
     candidates = []
     seen: set[int] = set()
 
-    # 1) Trending
-    try:
-        trending = await get_trending("movie", "week")
-        for t in trending[:15]:
-            if t["id"] in seen:
+    async def _add_from_list(items: list[dict], limit: int = 10):
+        for t in items[:limit]:
+            tid = t.get("id")
+            if not tid or tid in seen:
                 continue
-            seen.add(t["id"])
+            seen.add(tid)
             try:
-                details = await get_movie_details(t["id"])
+                details = await get_movie_details(tid)
                 candidates.append(tmdb_to_movie(details))
                 await asyncio.sleep(0.3)
             except Exception:
                 pass
-    except Exception as e:
-        logger.warning("Trending fetch failed", error=str(e))
 
-    # 2) Discover by top genres
-    top_genres = list(profile.get("genre_weights", {}).keys())[:3]
-    if top_genres:
-        try:
-            discovered = await discover_movies(top_genres)
-            for t in discovered[:15]:
-                if t["id"] in seen:
-                    continue
-                seen.add(t["id"])
+    # 1) Trending (week + day)
+    try:
+        trending = await get_trending("movie", "week")
+        await _add_from_list(trending, 15)
+    except Exception as e:
+        logger.warning("Trending week failed", error=str(e))
+
+    try:
+        trending_day = await get_trending("movie", "day")
+        await _add_from_list(trending_day, 10)
+    except Exception as e:
+        logger.warning("Trending day failed", error=str(e))
+
+    # 2) Discover by top genres (more genres, multiple years)
+    top_genres = list(profile.get("genre_weights", {}).keys())[:5]
+    for i in range(0, len(top_genres), 2):
+        genre_chunk = top_genres[i:i+2]
+        if genre_chunk:
+            for min_year in [2024, 2022]:
                 try:
-                    details = await get_movie_details(t["id"])
-                    candidates.append(tmdb_to_movie(details))
-                    await asyncio.sleep(0.3)
+                    discovered = await discover_movies(genre_chunk, min_year=min_year)
+                    await _add_from_list(discovered, 10)
                 except Exception:
                     pass
-        except Exception as e:
-            logger.warning("Discover failed", error=str(e))
 
+    # 3) Recommendations based on top-rated watched movies
+    top_watched = sorted(watched, key=lambda m: m.get("rating_imdb", 0) or 0, reverse=True)
+    # Pick up to 5 best-rated watched movies for recommendations
+    liked_ids = signals.get("liked", set()) if signals else set()
+    seed_movies = []
+    for m in top_watched:
+        tmdb_id = m.get("tmdb_id")
+        if tmdb_id and (tmdb_id in liked_ids or (m.get("rating_imdb") or 0) >= 7.0):
+            seed_movies.append(tmdb_id)
+        if len(seed_movies) >= 5:
+            break
+    # Shuffle to get variety across runs
+    random.shuffle(seed_movies)
+
+    for seed_id in seed_movies[:3]:
+        try:
+            recs = await get_recommendations(seed_id)
+            await _add_from_list(recs, 8)
+        except Exception:
+            pass
+        try:
+            sims = await get_similar(seed_id)
+            await _add_from_list(sims, 5)
+        except Exception:
+            pass
+
+    # 4) Discover by favorite directors
+    top_directors = list(profile.get("director_weights", {}).keys())[:3]
+    if top_directors:
+        # Use general discover with high rating as proxy (TMDB doesn't support director filter in discover)
+        try:
+            discovered = await discover_movies(top_genres[:2], min_year=2020)
+            await _add_from_list(discovered, 10)
+        except Exception:
+            pass
+
+    logger.info("Candidates from all sources", total=len(candidates))
     return candidates
+
+
+async def _search_torrent(agg: TorrentAggregator, title_ru: str, title_en: str, year: int | None) -> list:
+    """Try multiple search strategies to find torrents."""
+    # Strategy 1: Russian title + year
+    if title_ru:
+        results = await agg.search_all(title_ru, year)
+        if results:
+            return results
+
+    # Strategy 2: English title + year
+    if title_en and title_en != title_ru:
+        results = await agg.search_all(title_en, year)
+        if results:
+            return results
+
+    # Strategy 3: Russian title without year
+    if title_ru and year:
+        results = await agg.search_all(title_ru, None)
+        if results:
+            return results
+
+    # Strategy 4: English title without year
+    if title_en and title_en != title_ru and year:
+        results = await agg.search_all(title_en, None)
+        if results:
+            return results
+
+    return []

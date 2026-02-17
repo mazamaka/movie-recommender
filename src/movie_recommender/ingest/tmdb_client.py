@@ -77,13 +77,37 @@ async def _get_genre_map() -> dict[str, int]:
     return _genre_cache
 
 
+async def get_recommendations(tmdb_id: int) -> list[dict]:
+    """Get TMDB recommendations for a movie."""
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.get(
+            f"{TMDB_BASE}/movie/{tmdb_id}/recommendations",
+            params={"api_key": settings.tmdb_api_key, "language": "ru-RU"},
+        )
+        resp.raise_for_status()
+        return resp.json().get("results", [])
+
+
+async def get_similar(tmdb_id: int) -> list[dict]:
+    """Get similar movies from TMDB."""
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.get(
+            f"{TMDB_BASE}/movie/{tmdb_id}/similar",
+            params={"api_key": settings.tmdb_api_key, "language": "ru-RU"},
+        )
+        resp.raise_for_status()
+        return resp.json().get("results", [])
+
+
 async def discover_movies(genre_names: list[str], min_year: int = 2024) -> list[dict]:
     """Discover movies by genres using TMDB discover API."""
+    from datetime import datetime
     genre_map = await _get_genre_map()
     genre_ids = [str(genre_map[g]) for g in genre_names if g in genre_map]
     if not genre_ids:
         return []
 
+    today = datetime.now().strftime("%Y-%m-%d")
     async with httpx.AsyncClient(timeout=15) as client:
         resp = await client.get(
             f"{TMDB_BASE}/discover/movie",
@@ -94,6 +118,7 @@ async def discover_movies(genre_names: list[str], min_year: int = 2024) -> list[
                 "vote_count.gte": "100",
                 "with_genres": ",".join(genre_ids),
                 "primary_release_date.gte": f"{min_year}-01-01",
+                "primary_release_date.lte": today,
             },
         )
         resp.raise_for_status()

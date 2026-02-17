@@ -1,33 +1,32 @@
 /**
- * Movie Recommender -- Lampa Sync Plugin
- * Автоматически отправляет историю просмотров на sync сервер.
+ * Movie Recommender -- Lampa Sync + Recommendations Plugin
  *
- * Установка: в Lampa -> Настройки -> Дополнения -> добавить URL плагина:
+ * Установка: Lampa -> Настройки -> Дополнения -> добавить URL:
  * http://94.156.232.242:9200/static/lampa_plugin.js
  */
 (function () {
     'use strict';
 
-    var SYNC_URL = window.lampa_settings && window.lampa_settings.sync_url
-        || 'http://94.156.232.242:9200/api/v1/sync';
-    var SYNC_UID = window.lampa_settings && window.lampa_settings.sync_uid || 'default';
+    var API_BASE = 'http://94.156.232.242:9200/api/v1';
+    var SYNC_URL = API_BASE + '/sync';
+    var REC_URL  = API_BASE + '/pipeline/recommendations';
+    var SYNC_UID = 'default';
+
+    // ==========================================
+    // 1. Синхронизация истории просмотров
+    // ==========================================
 
     function sendToServer(type, data) {
         try {
             var xhr = new XMLHttpRequest();
             xhr.open('POST', SYNC_URL + '/push', true);
             xhr.setRequestHeader('Content-Type', 'application/json');
-            xhr.send(JSON.stringify({
-                uid: SYNC_UID,
-                type: type,
-                data: data
-            }));
+            xhr.send(JSON.stringify({ uid: SYNC_UID, type: type, data: data }));
         } catch (e) {
             console.error('[MovieRec] Sync error:', e);
         }
     }
 
-    // Синхронизация при просмотре фильма
     Lampa.Listener.follow('full', function (e) {
         if (e.type === 'complite' && e.data && e.data.movie) {
             var movie = e.data.movie;
@@ -43,20 +42,126 @@
         }
     });
 
-    // Синхронизация закладок при изменении
     Lampa.Listener.follow('favorite', function (e) {
         if (e.type === 'add' || e.type === 'remove') {
-            var fav = Lampa.Storage.get('favorite', '{}');
-            sendToServer('full', fav);
+            sendToServer('full', Lampa.Storage.get('favorite', '{}'));
         }
     });
 
-    // Полная синхронизация при запуске (с задержкой)
     setTimeout(function () {
-        var fav = Lampa.Storage.get('favorite', '{}');
-        sendToServer('full', fav);
+        sendToServer('full', Lampa.Storage.get('favorite', '{}'));
         console.log('[MovieRec] Initial sync sent');
     }, 5000);
 
-    console.log('[MovieRec] Sync plugin loaded, server: ' + SYNC_URL);
+    // ==========================================
+    // 2. Рекомендации из нашего чата
+    // ==========================================
+
+    function startRecommendations() {
+        if (window.movie_rec_ready) return;
+        window.movie_rec_ready = true;
+
+        function RecMainComponent(object) {
+            var comp = new Lampa.InteractionMain(object);
+
+            comp.create = function () {
+                var _this = this;
+                this.activity.loader(true);
+
+                var network = new Lampa.Reguest();
+                network.timeout(10000);
+
+                network.silent(REC_URL, function (data) {
+                    var results = data.results || [];
+                    if (!results.length) {
+                        _this.empty();
+                        return;
+                    }
+
+                    var lines = [];
+
+                    // Line 1: Все рекомендации
+                    lines.push({
+                        title: 'Все рекомендации',
+                        results: results,
+                        nomore: true
+                    });
+
+                    // Group by genres
+                    var genreMap = {};
+                    for (var i = 0; i < results.length; i++) {
+                        var movie = results[i];
+                        var genres = movie.genres || [];
+                        for (var j = 0; j < genres.length; j++) {
+                            var g = genres[j];
+                            if (!genreMap[g]) genreMap[g] = [];
+                            genreMap[g].push(movie);
+                        }
+                    }
+
+                    // Sort genres by movie count descending
+                    var genreKeys = Object.keys(genreMap);
+                    genreKeys.sort(function (a, b) {
+                        return genreMap[b].length - genreMap[a].length;
+                    });
+
+                    // Add genre lines (only genres with 2+ movies)
+                    for (var k = 0; k < genreKeys.length; k++) {
+                        var genre = genreKeys[k];
+                        var movies = genreMap[genre];
+                        if (movies.length >= 2) {
+                            lines.push({
+                                title: genre,
+                                results: movies,
+                                nomore: true
+                            });
+                        }
+                    }
+
+                    _this.build(lines);
+                }, function () {
+                    _this.empty();
+                });
+
+                return this.render();
+            };
+
+            return comp;
+        }
+
+        Lampa.Component.add('movie_rec_main', RecMainComponent);
+
+        var icon = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z" fill="currentColor"/></svg>';
+
+        var button = $('<li class="menu__item selector" data-action="movie_rec">' +
+            '<div class="menu__ico">' + icon + '</div>' +
+            '<div class="menu__text">Рекомендации</div>' +
+            '</li>');
+
+        button.on('hover:enter', function () {
+            Lampa.Activity.push({
+                url: '',
+                title: 'Рекомендации',
+                component: 'movie_rec_main',
+                page: 1
+            });
+        });
+
+        var menu = $('.menu .menu__list').eq(0);
+        if (menu.length) {
+            menu.append(button);
+        }
+
+        console.log('[MovieRec] Recommendations menu added');
+    }
+
+    if (window.appready) {
+        startRecommendations();
+    } else {
+        Lampa.Listener.follow('app', function (e) {
+            if (e.type === 'ready') startRecommendations();
+        });
+    }
+
+    console.log('[MovieRec] Plugin loaded, server: ' + API_BASE);
 })();

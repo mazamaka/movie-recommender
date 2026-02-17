@@ -12,10 +12,11 @@ async def publish_recommendation(
     movie: dict,
     torrent: dict,
     trailer_url: str | None = None,
+    rezka_url: str | None = None,
 ) -> int | None:
     """Publish movie recommendation to Telegram channel. Returns message_id or None."""
     bot = Bot(token=settings.telegram_bot_token)
-    text = format_message(movie, torrent, trailer_url)
+    text = format_message(movie, torrent, trailer_url, rezka_url)
 
     try:
         if movie.get("poster_url"):
@@ -40,7 +41,7 @@ async def publish_recommendation(
         return None
 
 
-def format_message(movie: dict, torrent: dict, trailer_url: str | None = None) -> str:
+def format_message(movie: dict, torrent: dict, trailer_url: str | None = None, rezka_url: str | None = None) -> str:
     """Format movie info as rich Telegram message with emojis."""
     import json
 
@@ -53,7 +54,7 @@ def format_message(movie: dict, torrent: dict, trailer_url: str | None = None) -
         lines.append(f"<i>{title_en}</i>")
     lines.append("")
 
-    # Ratings
+    # Ratings + vote count
     ratings = []
     if movie.get("rating_kp"):
         kp = movie["rating_kp"]
@@ -62,9 +63,22 @@ def format_message(movie: dict, torrent: dict, trailer_url: str | None = None) -
     if movie.get("rating_imdb"):
         imdb = movie["rating_imdb"]
         star = _rating_emoji(imdb)
-        ratings.append(f"{star} IMDB: <b>{imdb}</b>")
+        vote_count = movie.get("vote_count", 0)
+        vote_str = f" ({_format_count(vote_count)})" if vote_count else ""
+        ratings.append(f"{star} IMDB: <b>{imdb}</b>{vote_str}")
     if ratings:
         lines.append(" | ".join(ratings))
+
+    # Popularity / user engagement
+    vote_count = movie.get("vote_count", 0)
+    popularity = movie.get("popularity", 0)
+    if vote_count > 0:
+        # Show how many people rated the movie
+        engagement = []
+        engagement.append(f"\U0001f465 {_format_count(vote_count)} \u043e\u0446\u0435\u043d\u043e\u043a")
+        if popularity > 50:
+            engagement.append(f"\U0001f4c8 \u043f\u043e\u043f\u0443\u043b\u044f\u0440\u043d\u043e\u0441\u0442\u044c: {popularity:.0f}")
+        lines.append(" | ".join(engagement))
 
     # Genres
     genres = movie.get("genres", [])
@@ -94,19 +108,19 @@ def format_message(movie: dict, torrent: dict, trailer_url: str | None = None) -
     if isinstance(directors, str):
         directors = json.loads(directors)
     if directors:
-        lines.append(f"\U0001f3ac \u0420\u0435\u0436\u0438\u0441\u0441\u0451\u0440: {', '.join(directors[:2])}")
+        lines.append(f"\U0001f3ac \u0420\u0435\u0436\u0438\u0441\u0441\u0451\u0440: <code>{', '.join(directors[:2])}</code>")
 
     # Actors
     actors = movie.get("actors", [])
     if isinstance(actors, str):
         actors = json.loads(actors)
     if actors:
-        lines.append(f"\U0001f31f \u0412 \u0440\u043e\u043b\u044f\u0445: {', '.join(actors[:4])}")
+        lines.append(f"\U0001f31f \u0412 \u0440\u043e\u043b\u044f\u0445: <code>{', '.join(actors[:4])}</code>")
 
     # Runtime
     if movie.get("runtime_min"):
         h, m = divmod(movie["runtime_min"], 60)
-        lines.append(f"\u23f1 {h}\u0447 {m}\u043c\u0438\u043d")
+        lines.append(f"\u23f1 <code>{h}\u0447 {m}\u043c\u0438\u043d</code>")
 
     lines.append("")
 
@@ -115,7 +129,7 @@ def format_message(movie: dict, torrent: dict, trailer_url: str | None = None) -
         desc = movie["description"][:350]
         if len(movie["description"]) > 350:
             desc += "..."
-        lines.append(desc)
+        lines.append(f"<code>{desc}</code>")
 
     lines.append("")
 
@@ -133,10 +147,10 @@ def format_message(movie: dict, torrent: dict, trailer_url: str | None = None) -
     # Audio/dubbing
     audio = torrent.get("audio", [])
     if audio:
-        lines.append(f"\U0001f399 \u041e\u0437\u0432\u0443\u0447\u043a\u0430: {', '.join(audio)}")
+        lines.append(f"\U0001f399 \u041e\u0437\u0432\u0443\u0447\u043a\u0430: <code>{', '.join(audio)}</code>")
 
     if torrent.get("speed_mbps"):
-        lines.append(f"\u26a1 \u0421\u043a\u043e\u0440\u043e\u0441\u0442\u044c: {torrent['speed_mbps']:.1f} MB/s")
+        lines.append(f"\u26a1 \u0421\u043a\u043e\u0440\u043e\u0441\u0442\u044c: <code>{torrent['speed_mbps']:.1f} MB/s</code>")
 
     # Score
     score = movie.get("score")
@@ -151,13 +165,24 @@ def format_message(movie: dict, torrent: dict, trailer_url: str | None = None) -
         links.append(f'<a href="https://www.themoviedb.org/movie/{tmdb_id}?language=ru">\U0001f4d6 TMDB</a>')
     if trailer_url:
         links.append(f'<a href="{trailer_url}">\u25b6\ufe0f \u0422\u0440\u0435\u0439\u043b\u0435\u0440</a>')
+    if rezka_url:
+        links.append(f'<a href="{rezka_url}">\U0001f3ac HDRezka</a>')
     if links:
         lines.append("\n" + "  |  ".join(links))
 
     # Reactions hint
-    lines.append("\n\U0001f44d \u2014 \u043d\u0440\u0430\u0432\u0438\u0442\u0441\u044f  |  \U0001f44e \u2014 \u043d\u0435 \u043d\u0440\u0430\u0432\u0438\u0442\u0441\u044f")
+    lines.append("\n\U0001f525 \u0444\u0430\u0432\u043e\u0440\u0438\u0442  |  \U0001f44d \u043d\u0440\u0430\u0432\u0438\u0442\u0441\u044f  |  \U0001f44e \u043d\u0435\u0442  |  \U0001f4a9 \u043d\u0435 \u0440\u0435\u043a\u043e\u043c\u0435\u043d\u0434\u043e\u0432\u0430\u0442\u044c \u043f\u043e\u0434\u043e\u0431\u043d\u044b\u0435")
 
     return "\n".join(lines)
+
+
+def _format_count(n: int) -> str:
+    """Format large numbers: 1500 -> '1.5K', 15000 -> '15K'."""
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    if n >= 1_000:
+        return f"{n / 1_000:.1f}K"
+    return str(n)
 
 
 def _rating_emoji(rating: float) -> str:
