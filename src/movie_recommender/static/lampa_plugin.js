@@ -160,7 +160,7 @@
 
         var menu = $('.menu .menu__list').eq(0);
         if (menu.length) {
-            menu.append(button);
+            menu.prepend(button);
         }
 
         console.log('[MovieRec] Recommendations menu added');
