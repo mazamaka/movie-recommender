@@ -1,0 +1,29 @@
+services:
+  app:
+    build: .
+    container_name: movie-recommender
+    env_file: .env
+    ports:
+      - "9200:9000"
+    volumes:
+      - app_data:/app/data
+    depends_on:
+      - jackett
+    restart: unless-stopped
+
+  jackett:
+    image: linuxserver/jackett:latest
+    container_name: movie-recommender-jackett
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Europe/Moscow
+    ports:
+      - "9117:9117"
+    volumes:
+      - jackett_config:/config
+    restart: unless-stopped
+
+volumes:
+  app_data:
+  jackett_config:

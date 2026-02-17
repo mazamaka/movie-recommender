@@ -3,13 +3,13 @@
  * Автоматически отправляет историю просмотров на sync сервер.
  *
  * Установка: в Lampa -> Настройки -> Дополнения -> добавить URL плагина:
- * http://YOUR_SERVER:9000/static/lampa_plugin.js
+ * http://94.156.232.242:9200/static/lampa_plugin.js
  */
 (function () {
     'use strict';
 
     var SYNC_URL = window.lampa_settings && window.lampa_settings.sync_url
-        || 'http://94.156.232.242:9000/api/v1/sync';
+        || 'http://94.156.232.242:9200/api/v1/sync';
     var SYNC_UID = window.lampa_settings && window.lampa_settings.sync_uid || 'default';
 
     function sendToServer(type, data) {
