@@ -1,0 +1,42 @@
+[project]
+name = "movie-recommender"
+version = "0.1.0"
+description = "Smart movie recommender based on Lampa watch history"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.34",
+    "sqlmodel>=0.0.22",
+    "aiosqlite>=0.20",
+    "httpx>=0.28",
+    "python-telegram-bot>=22.0",
+    "scikit-learn>=1.6",
+    "numpy>=2.0",
+    "beautifulsoup4>=4.12",
+    "lxml>=5.0",
+    "pydantic-settings>=2.7",
+    "typer[all]>=0.15",
+    "rich>=13.9",
+    "apscheduler>=3.10",
+    "structlog>=24.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "pytest-cov>=6.0", "ruff>=0.9", "mypy>=1.14"]
+
+[project.scripts]
+movie-recommender = "movie_recommender.cli.main:app"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "ASYNC", "B", "SIM", "RUF"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
