@@ -185,7 +185,7 @@ async def run_pipeline(top_n: int | None = None) -> list[dict]:
                         await post_reviews_as_comments(msg_id, reviews[:5], rec["movie"].get("title_ru", ""))
                     except Exception as e:
                         logger.warning("Rezka comments failed", error=str(e))
-            await asyncio.sleep(3)
+            await asyncio.sleep(settings.publish_delay)
     finally:
         resume_poll()
 
@@ -253,7 +253,9 @@ async def _enrich_movies(items: list[dict]) -> list[dict]:
             else:
                 continue
             enriched.append(tmdb_to_movie(details))
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(settings.tmdb_request_delay)
+        except httpx.HTTPError as e:
+            logger.warning("Enrich HTTP error", title=item.get("title"), error=str(e))
         except Exception as e:
             logger.warning("Enrich failed", title=item.get("title"), error=str(e))
 
@@ -311,9 +313,9 @@ async def _get_candidates(watched: list[dict], profile: dict, signals: dict | No
             try:
                 details = await get_movie_details(tid)
                 candidates.append(tmdb_to_movie(details))
-                await asyncio.sleep(0.3)
-            except Exception:
-                pass
+                await asyncio.sleep(settings.tmdb_request_delay)
+            except httpx.HTTPError:
+                logger.debug("TMDB detail fetch failed", tmdb_id=tid)
 
     # 1) Trending (week + day)
     try:
@@ -337,12 +339,11 @@ async def _get_candidates(watched: list[dict], profile: dict, signals: dict | No
                 try:
                     discovered = await discover_movies(genre_chunk, min_year=min_year)
                     await _add_from_list(discovered, 10)
-                except Exception:
-                    pass
+                except httpx.HTTPError as e:
+                    logger.debug("Discover failed", genres=genre_chunk, error=str(e))
 
     # 3) Recommendations based on top-rated watched movies
     top_watched = sorted(watched, key=lambda m: m.get("rating_imdb", 0) or 0, reverse=True)
-    # Pick up to 5 best-rated watched movies for recommendations
     liked_ids = signals.get("liked", set()) if signals else set()
     seed_movies = []
     for m in top_watched:
@@ -351,30 +352,28 @@ async def _get_candidates(watched: list[dict], profile: dict, signals: dict | No
             seed_movies.append(tmdb_id)
         if len(seed_movies) >= 5:
             break
-    # Shuffle to get variety across runs
     random.shuffle(seed_movies)
 
     for seed_id in seed_movies[:3]:
         try:
             recs = await get_recommendations(seed_id)
             await _add_from_list(recs, 8)
-        except Exception:
-            pass
+        except httpx.HTTPError:
+            logger.debug("Recommendations fetch failed", seed_id=seed_id)
         try:
             sims = await get_similar(seed_id)
             await _add_from_list(sims, 5)
-        except Exception:
-            pass
+        except httpx.HTTPError:
+            logger.debug("Similar fetch failed", seed_id=seed_id)
 
     # 4) Discover by favorite directors
     top_directors = list(profile.get("director_weights", {}).keys())[:3]
     if top_directors:
-        # Use general discover with high rating as proxy (TMDB doesn't support director filter in discover)
         try:
-            discovered = await discover_movies(top_genres[:2], min_year=2020)
+            discovered = await discover_movies(top_genres[:2], min_year=settings.rec_min_year)
             await _add_from_list(discovered, 10)
-        except Exception:
-            pass
+        except httpx.HTTPError as e:
+            logger.debug("Director discover failed", error=str(e))
 
     logger.info("Candidates from all sources", total=len(candidates))
     return candidates

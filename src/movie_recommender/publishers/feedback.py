@@ -15,6 +15,7 @@ _published: dict[str, dict] = {}  # message_id -> movie info
 _feedback: dict[str, dict] = {}   # tmdb_id -> {likes, dislikes, genres}
 _poll_offset: int = 0
 _poll_paused: bool = False
+_lock = asyncio.Lock()  # guards _poll_offset / _feedback mutations in poll_reactions
 
 FAVORITE_EMOJIS = {"🔥", "❤️", "🏆", "⚡"}  # Super liked - strong positive boost
 LIKE_EMOJIS = {"👍", "🎉", "😍", "💯"}  # Liked
@@ -23,15 +24,27 @@ BLOCK_EMOJIS = {"💩"}  # Block similar genres from recommendations
 
 
 def init_feedback():
-    """Load persisted feedback data."""
-    global _published, _feedback, _poll_offset
-    _published = load_json("published_messages", {})
-    _feedback = load_json("reaction_feedback", {})
+    """Load persisted feedback data.
+
+    Uses .clear() + .update() to mutate in-place so that any module
+    that imported the dict reference sees the updated data.
+    """
+    global _poll_offset
+    _published.clear()
+    _published.update(load_json("published_messages", {}))
+    _feedback.clear()
+    _feedback.update(load_json("reaction_feedback", {}))
     _poll_offset = load_json("poll_offset", {"offset": 0}).get("offset", 0)
 
 
 def save_published(message_id: int, movie: dict):
-    """Save mapping of Telegram message_id to movie data."""
+    """Save mapping of Telegram message_id to movie data.
+
+    NOTE: This is intentionally sync -- called from sync context in runner.py.
+    ``_published`` is also read inside ``poll_reactions`` (via ``_process_reaction``
+    / ``_process_reaction_count``), but writes here happen only between poll
+    cycles (publish pauses the poll loop), so no data-race in practice.
+    """
     poster = movie.get("poster_url", "")
     poster_path = poster.replace("https://image.tmdb.org/t/p/w500", "") if poster else ""
     _published[str(message_id)] = {
@@ -44,8 +57,14 @@ def save_published(message_id: int, movie: dict):
         "vote_average": movie.get("rating_imdb"),
         "vote_count": movie.get("vote_count", 0),
         "poster_path": poster_path,
+        "countries": movie.get("countries", []),
     }
     save_json("published_messages", _published)
+
+
+def get_published() -> dict[str, dict]:
+    """Get all published messages: {message_id: movie_info}."""
+    return _published
 
 
 def get_published_tmdb_ids() -> set[int]:
@@ -121,17 +140,18 @@ async def poll_reactions():
             logger.warning("Telegram getUpdates failed", response=data)
             return
 
-        for update in data.get("result", []):
-            _poll_offset = update["update_id"] + 1
-            reaction_count = update.get("message_reaction_count")
-            if reaction_count:
-                _process_reaction_count(reaction_count)
-            reaction = update.get("message_reaction")
-            if reaction:
-                _process_reaction(reaction)
+        async with _lock:
+            for update in data.get("result", []):
+                _poll_offset = update["update_id"] + 1
+                reaction_count = update.get("message_reaction_count")
+                if reaction_count:
+                    _process_reaction_count(reaction_count)
+                reaction = update.get("message_reaction")
+                if reaction:
+                    _process_reaction(reaction)
 
-        # Save offset
-        save_json("poll_offset", {"offset": _poll_offset})
+            # Save offset
+            save_json("poll_offset", {"offset": _poll_offset})
 
     except Exception as e:
         logger.warning("Reaction poll error", error=str(e))

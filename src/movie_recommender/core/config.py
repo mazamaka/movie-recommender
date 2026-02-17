@@ -50,5 +50,30 @@ class Settings(BaseSettings):
     content_types: str = "movie,series,cartoon"
     pipeline_interval_hours: int = 12
 
+    # Lampa CUB community reactions
+    cub_api_url: str = "https://cub.rip/api/reactions/get"
+    cub_mirrors: list[str] = ["https://cubnotrip.top/api/reactions/get"]
+    cub_min_fires: int = 50
+
+    # Recommendation filters
+    rec_min_year: int = 2020
+    rec_blocked_countries: list[str] = ["Mexico", "Taiwan", "India", "Vietnam", "Russia"]
+    rec_bayesian_prior: float = 6.5
+    rec_bayesian_min_votes: int = 500
+    rec_bayesian_min_rating: float = 7.0
+    rec_bayesian_vote_threshold: int = 200
+
+    # Ranking weights
+    rank_quality: float = 0.25
+    rank_fire_ratio: float = 0.20
+    rank_cub_popularity: float = 0.15
+    rank_tmdb_popularity: float = 0.10
+    rank_pipeline: float = 0.10
+    rank_freshness: float = 0.20
+
+    # API rate limiting
+    tmdb_request_delay: float = 0.3
+    publish_delay: float = 3.0
+
 
 settings = Settings()

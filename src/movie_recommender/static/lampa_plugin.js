@@ -78,12 +78,23 @@
                         return;
                     }
 
+                    // Deep clone each movie to avoid Lampa mutating shared refs
+                    function cloneResults(arr) {
+                        var out = [];
+                        for (var i = 0; i < arr.length; i++) {
+                            var o = {};
+                            for (var k in arr[i]) o[k] = arr[i][k];
+                            out.push(o);
+                        }
+                        return out;
+                    }
+
                     var lines = [];
 
                     // Line 1: Все рекомендации
                     lines.push({
                         title: 'Все рекомендации',
-                        results: results,
+                        results: cloneResults(results),
                         nomore: true
                     });
 
@@ -105,14 +116,14 @@
                         return genreMap[b].length - genreMap[a].length;
                     });
 
-                    // Add genre lines (only genres with 2+ movies)
+                    // Add genre lines (genres with at least 1 movie)
                     for (var k = 0; k < genreKeys.length; k++) {
                         var genre = genreKeys[k];
                         var movies = genreMap[genre];
-                        if (movies.length >= 2) {
+                        if (movies.length >= 1) {
                             lines.push({
                                 title: genre,
-                                results: movies,
+                                results: cloneResults(movies),
                                 nomore: true
                             });
                         }
