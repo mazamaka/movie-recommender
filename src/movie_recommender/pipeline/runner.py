@@ -223,6 +223,9 @@ async def _get_sync_history() -> tuple[list[dict], dict]:
                 "wath": set(data.get("wath", [])),
                 "booked": set(data.get("booked", [])),
             }
+            progress = _extract_progress_signals(items)
+            signals["finished"] = progress["finished"]
+            signals["dropped"] = progress["dropped"]
 
             return items, signals
     except Exception as e:
@@ -298,6 +301,32 @@ def tmdb_to_movie(d: dict) -> dict:
         "trailer_url": trailer_url,
         "countries": [c.get("name", "") for c in d.get("production_countries", [])],
     }
+
+
+def _extract_progress_signals(items: list[dict]) -> dict[str, set[int]]:
+    """Classify items into finished (ratio > 0.80) and dropped ([0.10, 0.50]) sets.
+
+    Skips items without valid duration (>0) to avoid ZeroDivisionError.
+    Items in the grey zone (0.50, 0.80] or below 0.10 are not classified.
+    """
+    finished: set[int] = set()
+    dropped: set[int] = set()
+
+    for item in items:
+        tmdb_id = item.get("tmdb_id")
+        duration = item.get("duration") or 0
+        time_watched = item.get("time_watched") or 0
+
+        if not tmdb_id or duration <= 0:
+            continue
+
+        ratio = time_watched / duration
+        if ratio > settings.finished_threshold:
+            finished.add(tmdb_id)
+        elif settings.dropped_min_threshold <= ratio <= settings.dropped_max_threshold:
+            dropped.add(tmdb_id)
+
+    return {"finished": finished, "dropped": dropped}
 
 
 async def _get_candidates(watched: list[dict], profile: dict, signals: dict | None = None) -> list[dict]:
