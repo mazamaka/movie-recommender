@@ -237,7 +237,7 @@ async def rerank_candidates(
 
     prompt_parts = [
         {"type": "text", "text": _build_system_prompt(len(candidates)), "cache_control": {"type": "ephemeral"}},
-        {"type": "text", "text": taste, "cache_control": {"type": "ephemeral"}},
+        {"type": "text", "text": taste},
         {"type": "text", "text": cand_list},
     ]
 

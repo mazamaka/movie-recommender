@@ -126,14 +126,18 @@ async def run_pipeline(top_n: int | None = None) -> list[dict]:
         finished_movies = [m for m in enriched if m.get("tmdb_id") in finished_ids]
         dropped_movies = [m for m in enriched if m.get("tmdb_id") in dropped_ids]
 
-        scored = await rerank_candidates(
+        reranked = await rerank_candidates(
             candidates=shortlist,
             feedback=get_reaction_feedback(),
             finished_movies=finished_movies,
             dropped_movies=dropped_movies,
             top_n=top_n,
         )
-        logger.info("Pipeline step 5b: LLM rerank complete", final_count=len(scored))
+        # Preserve torrent search safety pool: LLM-ranked top first, then remaining shortlist
+        # (avoids publishing 0 movies if torrents unavailable for the top 10)
+        ranked_ids = {m.get("tmdb_id") for m in reranked}
+        scored = reranked + [c for c in shortlist if c.get("tmdb_id") not in ranked_ids]
+        logger.info("Pipeline step 5b: LLM rerank complete", picked=len(reranked), pool=len(scored))
 
     # Step 6-7: Search torrents + filter
     logger.info("Pipeline step 6-7: searching torrents")
@@ -141,7 +145,7 @@ async def run_pipeline(top_n: int | None = None) -> list[dict]:
     agg = TorrentAggregator()
     pipe = FilterPipeline()
 
-    for movie in (scored if settings.llm_rerank_enabled else scored[:top_n * 10]):
+    for movie in scored[:top_n * 10]:
         title_ru = movie.get("title_ru", "")
         title_en = movie.get("title_en", "")
         year = movie.get("year")
