@@ -1,5 +1,4 @@
 """Unit tests for finished/dropped extraction logic in pipeline runner."""
-import pytest
 
 
 def _make_items(*progress_specs):

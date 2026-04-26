@@ -1,5 +1,4 @@
 """Integration tests: pipeline runner + LLM reranker (with mocks)."""
-import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
