@@ -115,13 +115,33 @@ async def run_pipeline(top_n: int | None = None) -> list[dict]:
         logger.warning("No new candidates after dedup, nothing to publish")
         return []
 
+    # Step 5b: LLM rerank top-N (no-op if disabled, no API key, or no taste signal)
+    if settings.llm_rerank_enabled:
+        from movie_recommender.recommender.llm_reranker import rerank_candidates
+        from movie_recommender.publishers.feedback import get_feedback as get_reaction_feedback
+
+        shortlist = scored[:settings.llm_rerank_shortlist_size]
+        finished_ids = signals.get("finished", set()) if signals else set()
+        dropped_ids = signals.get("dropped", set()) if signals else set()
+        finished_movies = [m for m in enriched if m.get("tmdb_id") in finished_ids]
+        dropped_movies = [m for m in enriched if m.get("tmdb_id") in dropped_ids]
+
+        scored = await rerank_candidates(
+            candidates=shortlist,
+            feedback=get_reaction_feedback(),
+            finished_movies=finished_movies,
+            dropped_movies=dropped_movies,
+            top_n=top_n,
+        )
+        logger.info("Pipeline step 5b: LLM rerank complete", final_count=len(scored))
+
     # Step 6-7: Search torrents + filter
     logger.info("Pipeline step 6-7: searching torrents")
     recommendations = []
     agg = TorrentAggregator()
     pipe = FilterPipeline()
 
-    for movie in scored[:top_n * 10]:
+    for movie in (scored if settings.llm_rerank_enabled else scored[:top_n * 10]):
         title_ru = movie.get("title_ru", "")
         title_en = movie.get("title_en", "")
         year = movie.get("year")
