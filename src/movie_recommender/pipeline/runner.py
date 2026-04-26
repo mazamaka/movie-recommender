@@ -115,6 +115,30 @@ async def run_pipeline(top_n: int | None = None) -> list[dict]:
         logger.warning("No new candidates after dedup, nothing to publish")
         return []
 
+    # Step 5b: LLM rerank top-N (no-op if disabled, no API key, or no taste signal)
+    if settings.llm_rerank_enabled:
+        from movie_recommender.recommender.llm_reranker import rerank_candidates
+        from movie_recommender.publishers.feedback import get_feedback as get_reaction_feedback
+
+        shortlist = scored[:settings.llm_rerank_shortlist_size]
+        finished_ids = signals.get("finished", set()) if signals else set()
+        dropped_ids = signals.get("dropped", set()) if signals else set()
+        finished_movies = [m for m in enriched if m.get("tmdb_id") in finished_ids]
+        dropped_movies = [m for m in enriched if m.get("tmdb_id") in dropped_ids]
+
+        reranked = await rerank_candidates(
+            candidates=shortlist,
+            feedback=get_reaction_feedback(),
+            finished_movies=finished_movies,
+            dropped_movies=dropped_movies,
+            top_n=top_n,
+        )
+        # Preserve torrent search safety pool: LLM-ranked top first, then remaining shortlist
+        # (avoids publishing 0 movies if torrents unavailable for the top 10)
+        ranked_ids = {m.get("tmdb_id") for m in reranked}
+        scored = reranked + [c for c in shortlist if c.get("tmdb_id") not in ranked_ids]
+        logger.info("Pipeline step 5b: LLM rerank complete", picked=len(reranked), pool=len(scored))
+
     # Step 6-7: Search torrents + filter
     logger.info("Pipeline step 6-7: searching torrents")
     recommendations = []
@@ -223,6 +247,9 @@ async def _get_sync_history() -> tuple[list[dict], dict]:
                 "wath": set(data.get("wath", [])),
                 "booked": set(data.get("booked", [])),
             }
+            progress = _extract_progress_signals(items)
+            signals["finished"] = progress["finished"]
+            signals["dropped"] = progress["dropped"]
 
             return items, signals
     except Exception as e:
@@ -298,6 +325,32 @@ def tmdb_to_movie(d: dict) -> dict:
         "trailer_url": trailer_url,
         "countries": [c.get("name", "") for c in d.get("production_countries", [])],
     }
+
+
+def _extract_progress_signals(items: list[dict]) -> dict[str, set[int]]:
+    """Classify items into finished (ratio > 0.80) and dropped ([0.10, 0.50]) sets.
+
+    Skips items without valid duration (>0) to avoid ZeroDivisionError.
+    Items in the grey zone (0.50, 0.80] or below 0.10 are not classified.
+    """
+    finished: set[int] = set()
+    dropped: set[int] = set()
+
+    for item in items:
+        tmdb_id = item.get("tmdb_id")
+        duration = item.get("duration") or 0
+        time_watched = item.get("time_watched") or 0
+
+        if not tmdb_id or duration <= 0:
+            continue
+
+        ratio = time_watched / duration
+        if ratio > settings.finished_threshold:
+            finished.add(tmdb_id)
+        elif settings.dropped_min_threshold <= ratio <= settings.dropped_max_threshold:
+            dropped.add(tmdb_id)
+
+    return {"finished": finished, "dropped": dropped}
 
 
 async def _get_candidates(watched: list[dict], profile: dict, signals: dict | None = None) -> list[dict]:

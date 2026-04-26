@@ -80,5 +80,19 @@ class Settings(BaseSettings):
     tmdb_request_delay: float = 0.3
     publish_delay: float = 3.0
 
+    # LLM reranker (Claude Sonnet)
+    anthropic_api_key: str = ""
+    llm_model: str = "claude-sonnet-4-6"  # Sonnet 4.6 — verified valid 2026-04-26
+    llm_rerank_enabled: bool = True
+    llm_rerank_shortlist_size: int = 30
+    llm_max_tokens: int = 2000
+    llm_timeout_seconds: int = 60
+    llm_debug_log: bool = False  # if True, dump prompts/responses to data/llm_debug/{date}.json
+
+    # Lampa watch progress thresholds (ratio = time_watched / duration)
+    finished_threshold: float = 0.80      # ratio > 0.80 => "finished" signal
+    dropped_min_threshold: float = 0.10   # 0.10 <= ratio <= dropped_max => "dropped" signal
+    dropped_max_threshold: float = 0.50
+
 
 settings = Settings()

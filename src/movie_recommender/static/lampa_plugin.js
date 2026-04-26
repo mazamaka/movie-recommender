@@ -30,6 +30,26 @@
     Lampa.Listener.follow('full', function (e) {
         if (e.type === 'complite' && e.data && e.data.movie) {
             var movie = e.data.movie;
+
+            // Look up watch progress in Lampa.Storage timeline
+            var time_watched = null;
+            var duration = null;
+            try {
+                var fileView = Lampa.Storage.get('file_view', '{}');
+                if (typeof fileView === 'string') fileView = JSON.parse(fileView);
+                // Lampa stores timeline keyed by hash; find by movie id match
+                for (var key in fileView) {
+                    var entry = fileView[key];
+                    if (entry && entry.id === movie.id) {
+                        time_watched = entry.time ? Math.round(entry.time) : null;
+                        duration = entry.duration ? Math.round(entry.duration) : null;
+                        break;
+                    }
+                }
+            } catch (err) {
+                console.warn('[MovieRec] Progress lookup failed:', err);
+            }
+
             sendToServer('history', [{
                 title: movie.title || movie.name || '',
                 year: movie.year || null,
@@ -37,7 +57,9 @@
                 kp_id: movie.kp_id || null,
                 imdb_id: movie.imdb_id || null,
                 tmdb_id: movie.id || null,
-                time: new Date().toISOString()
+                timestamp: new Date().toISOString(),
+                time_watched: time_watched,
+                duration: duration
             }]);
         }
     });
