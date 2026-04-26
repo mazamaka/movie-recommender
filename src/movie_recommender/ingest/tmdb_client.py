@@ -123,3 +123,36 @@ async def discover_movies(genre_names: list[str], min_year: int = 2024) -> list[
         )
         resp.raise_for_status()
         return resp.json().get("results", [])
+
+
+async def get_popular(page: int = 1) -> list[dict]:
+    """Get currently popular movies from TMDB."""
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.get(
+            f"{TMDB_BASE}/movie/popular",
+            params={"api_key": settings.tmdb_api_key, "language": "ru-RU", "page": str(page)},
+        )
+        resp.raise_for_status()
+        return resp.json().get("results", [])
+
+
+async def get_top_rated(page: int = 1) -> list[dict]:
+    """Get highest-rated movies of all time from TMDB."""
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.get(
+            f"{TMDB_BASE}/movie/top_rated",
+            params={"api_key": settings.tmdb_api_key, "language": "ru-RU", "page": str(page)},
+        )
+        resp.raise_for_status()
+        return resp.json().get("results", [])
+
+
+async def get_now_playing(page: int = 1) -> list[dict]:
+    """Get movies currently in theaters from TMDB."""
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.get(
+            f"{TMDB_BASE}/movie/now_playing",
+            params={"api_key": settings.tmdb_api_key, "language": "ru-RU", "page": str(page)},
+        )
+        resp.raise_for_status()
+        return resp.json().get("results", [])

@@ -11,6 +11,7 @@ from movie_recommender.core.config import settings
 from movie_recommender.ingest.tmdb_client import (
     get_movie_details, search_movie, get_trending, discover_movies,
     get_recommendations, get_similar,
+    get_popular, get_top_rated, get_now_playing,
 )
 from movie_recommender.recommender.content_based import score_movie
 from movie_recommender.recommender.profile_builder import build_profile
@@ -428,6 +429,27 @@ async def _get_candidates(watched: list[dict], profile: dict, signals: dict | No
             await _add_from_list(discovered, 10)
         except httpx.HTTPError as e:
             logger.debug("Director discover failed", error=str(e))
+
+    # 5) Popular (current zeitgeist — what everyone's watching now)
+    try:
+        popular = await get_popular()
+        await _add_from_list(popular, 15)
+    except Exception as e:
+        logger.warning("Popular fetch failed", error=str(e))
+
+    # 6) Top rated (timeless classics with high ratings)
+    try:
+        top_rated = await get_top_rated()
+        await _add_from_list(top_rated, 10)
+    except Exception as e:
+        logger.warning("Top rated fetch failed", error=str(e))
+
+    # 7) Now playing (currently in theaters)
+    try:
+        now_playing = await get_now_playing()
+        await _add_from_list(now_playing, 10)
+    except Exception as e:
+        logger.warning("Now playing fetch failed", error=str(e))
 
     logger.info("Candidates from all sources", total=len(candidates))
     return candidates
