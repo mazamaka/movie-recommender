@@ -18,3 +18,4 @@ data/*.json
 *.swp
 *.swo
 .DS_Store
+.worktrees/
