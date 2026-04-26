@@ -131,6 +131,11 @@ def format_message(movie: dict, torrent: dict, trailer_url: str | None = None, r
             desc += "..."
         lines.append(f"<code>{desc}</code>")
 
+    # LLM reasoning (only if reranker provided one)
+    if movie.get("llm_reason"):
+        lines.append("")
+        lines.append(f"\U0001f916 <i>{movie['llm_reason']}</i>")
+
     lines.append("")
 
     # Torrent info
