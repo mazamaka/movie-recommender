@@ -31,7 +31,9 @@ class HistoryItem(BaseModel):
     kp_id: int | None = None
     imdb_id: str | None = None
     tmdb_id: int | None = None
-    time: str | None = None
+    timestamp: str | None = None    # ISO datetime when item was watched (was: time)
+    time_watched: int | None = None  # seconds watched (NEW)
+    duration: int | None = None      # total duration in seconds (NEW)
 
 
 @router.post("/push")
@@ -52,11 +54,11 @@ async def push_sync(payload: SyncPayload):
         logger.info("Full sync saved", keys=list(payload.data.keys()))
 
     elif payload.type == "history" and isinstance(payload.data, list):
-        # Deduplicate by tmdb_id + time
-        existing = {(h.get("tmdb_id"), h.get("time")) for h in _history}
+        # Deduplicate by tmdb_id + timestamp
+        existing = {(h.get("tmdb_id"), h.get("timestamp")) for h in _history}
         new_items = [
             item for item in payload.data
-            if (item.get("tmdb_id"), item.get("time")) not in existing
+            if (item.get("tmdb_id"), item.get("timestamp")) not in existing
         ]
         _history.extend(new_items)
         save_json("sync_history", _history)
