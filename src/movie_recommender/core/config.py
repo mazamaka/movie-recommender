@@ -82,7 +82,7 @@ class Settings(BaseSettings):
 
     # LLM reranker (Claude Sonnet)
     anthropic_api_key: str = ""
-    llm_model: str = "claude-sonnet-4-5-20250929"  # Sonnet 4.5; verify latest in Task 13 before deployment
+    llm_model: str = "claude-sonnet-4-6"  # Sonnet 4.6 — verified valid 2026-04-26
     llm_rerank_enabled: bool = True
     llm_rerank_shortlist_size: int = 30
     llm_max_tokens: int = 2000
