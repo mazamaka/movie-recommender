@@ -1,6 +1,7 @@
 """Telegram reaction feedback tracker."""
 import asyncio
 import json
+from datetime import datetime
 
 import httpx
 import structlog
@@ -58,6 +59,7 @@ def save_published(message_id: int, movie: dict):
         "vote_count": movie.get("vote_count", 0),
         "poster_path": poster_path,
         "countries": movie.get("countries", []),
+        "published_at": datetime.utcnow().isoformat(),
     }
     save_json("published_messages", _published)
 
@@ -68,12 +70,25 @@ def get_published() -> dict[str, dict]:
 
 
 def get_published_tmdb_ids() -> set[int]:
-    """Get set of already published tmdb_ids to avoid duplicates."""
-    ids = set()
+    """Get set of recently-published tmdb_ids (within PUBLISHED_TTL_DAYS).
+
+    Entries without published_at (legacy from before this feature) are treated as
+    EXPIRED — i.e., they may be re-recommended. New entries get a fresh timestamp.
+    """
+    from datetime import timedelta
+
+    cutoff = datetime.utcnow() - timedelta(days=settings.published_ttl_days)
+    cutoff_iso = cutoff.isoformat()
+
+    ids: set[int] = set()
     for msg_data in _published.values():
-        tmdb_id = msg_data.get("tmdb_id")
-        if tmdb_id:
-            ids.add(tmdb_id)
+        published_at = msg_data.get("published_at")
+        if not published_at:
+            continue  # legacy entry without timestamp — let it resurface
+        if published_at >= cutoff_iso:
+            tmdb_id = msg_data.get("tmdb_id")
+            if tmdb_id:
+                ids.add(tmdb_id)
     return ids
 
 
