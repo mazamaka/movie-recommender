@@ -20,20 +20,28 @@ STATIC_DIR = Path(__file__).parent / "static"
 
 
 async def _scheduled_pipeline():
-    """Run pipeline on schedule."""
+    """Run pipeline daily at 21:00 Budapest time (Europe/Budapest)."""
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+
     from movie_recommender.pipeline.runner import run_pipeline
 
-    interval = settings.pipeline_interval_hours * 3600
-    # Wait for first scheduled run
-    await asyncio.sleep(interval)
+    tz = ZoneInfo("Europe/Budapest")
+
     while True:
+        now = datetime.now(tz)
+        target = now.replace(hour=21, minute=0, second=0, microsecond=0)
+        if now >= target:
+            target += timedelta(days=1)
+        wait_seconds = (target - now).total_seconds()
+        logger.info("Pipeline scheduled", next_run=target.isoformat(), wait_hours=round(wait_seconds / 3600, 1))
+        await asyncio.sleep(wait_seconds)
         try:
             logger.info("Scheduled pipeline run starting")
             results = await run_pipeline()
             logger.info("Scheduled pipeline done", published=len(results))
         except Exception as e:
             logger.error("Scheduled pipeline failed", error=str(e))
-        await asyncio.sleep(interval)
 
 
 @asynccontextmanager

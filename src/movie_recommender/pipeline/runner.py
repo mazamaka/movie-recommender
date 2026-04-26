@@ -99,9 +99,10 @@ async def run_pipeline(top_n: int | None = None) -> list[dict]:
             feedback_bonus = sum(genre_feedback.get(g, 0.0) for g in movie_genres) * 0.1
             s = min(max(s + feedback_bonus, 0.0), 1.0)
         scored.append({**c, "score": s})
-    # Filter out unreleased movies
+    # Filter out unreleased and old movies
     today = datetime.now().strftime("%Y-%m-%d")
     scored = [c for c in scored if not c.get("release_date") or c["release_date"] <= today]
+    scored = [c for c in scored if (c.get("year") or 9999) >= settings.rec_min_year]
 
     scored.sort(key=lambda x: x["score"], reverse=True)
     logger.info(

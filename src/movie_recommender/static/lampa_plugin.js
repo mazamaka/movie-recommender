@@ -158,12 +158,23 @@
             });
         });
 
-        var menu = $('.menu .menu__list').eq(0);
-        if (menu.length) {
-            menu.prepend(button);
+        // Insert as first menu item, retry until menu is ready
+        function insertMenu() {
+            var firstItem = $('.menu .menu__list .menu__item').eq(0);
+            if (firstItem.length) {
+                button.insertBefore(firstItem);
+                console.log('[MovieRec] Recommendations menu added (top)');
+            } else {
+                var menu = $('.menu .menu__list').eq(0);
+                if (menu.length) {
+                    menu.prepend(button);
+                    console.log('[MovieRec] Recommendations menu added (prepend)');
+                } else {
+                    setTimeout(insertMenu, 500);
+                }
+            }
         }
-
-        console.log('[MovieRec] Recommendations menu added');
+        insertMenu();
     }
 
     if (window.appready) {

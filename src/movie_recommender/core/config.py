@@ -57,7 +57,12 @@ class Settings(BaseSettings):
 
     # Recommendation filters
     rec_min_year: int = 2020
-    rec_blocked_countries: list[str] = ["Mexico", "Taiwan", "India", "Vietnam", "Russia"]
+    rec_blocked_countries: list[str] = [
+        "Mexico", "Taiwan", "India", "Vietnam", "Brazil",
+        "Russia", "Belarus", "Ukraine", "Kazakhstan", "Uzbekistan",
+        "Kyrgyzstan", "Tajikistan", "Turkmenistan", "Armenia",
+        "Azerbaijan", "Moldova", "Georgia",
+    ]
     rec_bayesian_prior: float = 6.5
     rec_bayesian_min_votes: int = 500
     rec_bayesian_min_rating: float = 7.0

@@ -5,6 +5,7 @@ import httpx
 import structlog
 
 from movie_recommender.core.config import settings
+from movie_recommender.ingest.cub_client import fetch_cub_reactions
 from movie_recommender.ingest.tmdb_client import search_movie, search_tv
 
 logger = structlog.get_logger()
@@ -24,6 +25,28 @@ _GENRE_NAMES: dict[int, str] = {
 def _escape_html(text: str) -> str:
     """Escape HTML special characters for Telegram parse_mode=HTML."""
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _format_votes(count: int) -> str:
+    """Format vote count: 1500 -> '1.5K'."""
+    if count >= 1000:
+        return f"{count / 1000:.1f}K"
+    return str(count)
+
+
+def _quality_badge(fire: int, shit: int) -> str:
+    """Build quality badge from CUB reactions."""
+    total = fire + shit
+    if total == 0:
+        return ""
+    ratio = fire / total
+    if ratio >= 0.8:
+        badge = "\u2705"  # green check
+    elif ratio >= 0.6:
+        badge = "\U0001f7e1"  # yellow circle
+    else:
+        badge = "\u26a0\ufe0f"  # warning
+    return f"Lampa: {badge} \U0001f525{fire} \U0001f4a9{shit} ({ratio:.0%})"
 
 
 async def handle_command(message: dict) -> None:
@@ -85,6 +108,7 @@ async def _cmd_search(chat_id: int, query: str, reply_to: int) -> None:
                 "original": m.get("original_title", ""),
                 "year": (m.get("release_date") or "")[:4],
                 "rating": m.get("vote_average", 0),
+                "votes": m.get("vote_count", 0),
                 "genres": [_GENRE_NAMES.get(g, "") for g in m.get("genre_ids", [])],
             })
 
@@ -99,6 +123,7 @@ async def _cmd_search(chat_id: int, query: str, reply_to: int) -> None:
                 "original": s.get("original_name", ""),
                 "year": (s.get("first_air_date") or "")[:4],
                 "rating": s.get("vote_average", 0),
+                "votes": s.get("vote_count", 0),
                 "genres": [_GENRE_NAMES.get(g, "") for g in s.get("genre_ids", [])],
             })
 
@@ -111,18 +136,37 @@ async def _cmd_search(chat_id: int, query: str, reply_to: int) -> None:
         await _send_reply(chat_id, f'По запросу "{safe_q}" ничего не найдено', reply_to)
         return
 
+    # Fetch CUB community reactions
+    movie_ids = [r["id"] for r in results if r["type"] == "movie"]
+    cub = await fetch_cub_reactions(movie_ids) if movie_ids else {}
+
     safe_q = _escape_html(query)
     lines = [f'<b>Результаты поиска: "{safe_q}"</b>\n']
     for i, r in enumerate(results, 1):
         icon = "\U0001f3ac" if r["type"] == "movie" else "\U0001f4fa"
         rating = f'{r["rating"]:.1f}' if r["rating"] else "—"
+        votes = r.get("votes", 0)
         genres = ", ".join(g for g in r["genres"] if g)
         year = r["year"] or "?"
 
         title = _escape_html(r["title"])
-        lines.append(f'{icon} <b>{i}. {title}</b> ({year}) \u2b50 {rating}')
+        line = f'{icon} <b>{i}. {title}</b> ({year})'
+        line += f'  \u2b50 {rating}'
+        if votes:
+            line += f' ({_format_votes(votes)})'
+        lines.append(line)
+
         if r["original"] and r["original"] != r["title"]:
             lines.append(f'   {_escape_html(r["original"])}')
+
+        # CUB quality line
+        c = cub.get(r["id"], {})
+        cub_fire = c.get("fire", 0)
+        cub_shit = c.get("shit", 0)
+        if cub_fire or cub_shit:
+            quality = _quality_badge(cub_fire, cub_shit)
+            lines.append(f'   {quality}')
+
         if genres:
             lines.append(f'   {genres}')
         lines.append("")
@@ -219,16 +263,35 @@ async def register_bot_commands() -> None:
         {"command": "help", "description": "Список команд"},
     ]
 
+    scopes: list[dict] = [
+        {"type": "default"},
+        {"type": "all_group_chats"},
+    ]
+    if settings.telegram_discussion_group_id:
+        scopes.append({"type": "chat", "chat_id": int(settings.telegram_discussion_group_id)})
+    if settings.telegram_channel_id:
+        scopes.append({"type": "chat", "chat_id": int(settings.telegram_channel_id)})
+
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.post(
-                f"https://api.telegram.org/bot{settings.telegram_bot_token}/setMyCommands",
-                json={"commands": commands},
+            for scope in scopes:
+                resp = await client.post(
+                    f"https://api.telegram.org/bot{settings.telegram_bot_token}/setMyCommands",
+                    json={"commands": commands, "scope": scope},
+                )
+                result = resp.json()
+                if not result.get("ok"):
+                    logger.warning("setMyCommands failed", scope=scope["type"], error=result.get("description"))
+            # Set bot description (shown when opening bot profile)
+            await client.post(
+                f"https://api.telegram.org/bot{settings.telegram_bot_token}/setMyDescription",
+                json={"description": "Умный рекомендатор фильмов и сериалов.\n\nИщу фильмы, показываю топ рекомендаций с рейтингами и отзывами. Работаю в группе обсуждения канала."},
             )
-            result = resp.json()
-            if result.get("ok"):
-                logger.info("Bot commands registered", count=len(commands))
-            else:
-                logger.warning("setMyCommands failed", error=result.get("description"))
+            # Set short description (shown in bot list / chat header)
+            await client.post(
+                f"https://api.telegram.org/bot{settings.telegram_bot_token}/setMyShortDescription",
+                json={"short_description": "Поиск и рекомендации фильмов"},
+            )
+            logger.info("Bot commands and description registered", count=len(commands))
     except Exception as e:
-        logger.warning("Failed to register bot commands", error=str(e))
+        logger.warning("Failed to register bot commands", error=type(e).__name__)
