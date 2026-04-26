@@ -2,12 +2,12 @@
  * Movie Recommender -- Lampa Sync + Recommendations Plugin
  *
  * Установка: Lampa -> Настройки -> Дополнения -> добавить URL:
- * http://94.156.232.242:9200/static/lampa_plugin.js
+ * https://cinema.maxbob.xyz/static/lampa_plugin.js
  */
 (function () {
     'use strict';
 
-    var API_BASE = 'http://94.156.232.242:9200/api/v1';
+    var API_BASE = 'https://cinema.maxbob.xyz/api/v1';
     var SYNC_URL = API_BASE + '/sync';
     var REC_URL  = API_BASE + '/pipeline/recommendations';
     var SYNC_UID = 'default';
