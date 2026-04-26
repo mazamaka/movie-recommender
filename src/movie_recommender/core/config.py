@@ -89,6 +89,9 @@ class Settings(BaseSettings):
     llm_timeout_seconds: int = 60
     llm_debug_log: bool = False  # if True, dump prompts/responses to data/llm_debug/{date}.json
 
+    # Published TTL — re-recommend movies older than this
+    published_ttl_days: int = 60
+
     # Lampa watch progress thresholds (ratio = time_watched / duration)
     finished_threshold: float = 0.80      # ratio > 0.80 => "finished" signal
     dropped_min_threshold: float = 0.10   # 0.10 <= ratio <= dropped_max => "dropped" signal
