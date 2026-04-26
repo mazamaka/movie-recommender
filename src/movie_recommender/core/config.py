@@ -39,7 +39,7 @@ class Settings(BaseSettings):
     rutracker_password: str = ""
 
     # TorrServer
-    torrserver_url: str = "http://94.156.232.242:8090"
+    torrserver_url: str = "http://150.241.81.67:17090"
 
     # Database
     database_url: str = "sqlite+aiosqlite:///data/movie_recommender.db"
